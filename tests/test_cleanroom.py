@@ -12,6 +12,7 @@ from __future__ import annotations
 import ast
 import pathlib
 import tomllib
+from collections.abc import Iterator
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "src" / "xrddirac"
@@ -23,21 +24,20 @@ def _modules() -> list[pathlib.Path]:
     return sorted(SOURCE.rglob("*.py"))
 
 
+def _imported_names(tree: ast.AST) -> Iterator[str]:
+    """Every module a file imports, absolute ones only: a relative import is this package."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            yield from (alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and not node.level:
+            yield node.module or ""
+
+
 def test_nothing_imports_dirac() -> None:
     """§CLEANROOM 2: DIRAC's source may not be reached, even at runtime."""
     for path in _modules():
-        tree = ast.parse(path.read_text())
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                names = [alias.name for alias in node.names]
-            elif isinstance(node, ast.ImportFrom):
-                if node.level:  # ``from .diracx import`` is this package, not DIRAC's
-                    continue
-                names = [node.module or ""]
-            else:
-                continue
-            for name in names:
-                assert name.split(".")[0] not in BANNED, f"{path} imports {name}"
+        for name in _imported_names(ast.parse(path.read_text())):
+            assert name.split(".")[0] not in BANNED, f"{path} imports {name}"
 
 
 def test_no_dirac_requirement_is_declared() -> None:
