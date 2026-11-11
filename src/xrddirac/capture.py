@@ -77,6 +77,24 @@ def interface() -> str:
 
 def run(command: list[str], *, device: str = "", home: pathlib.Path | None = None) -> int:
     """Run ``command`` under a capture, then write the bundle."""
+    if not command:
+        print("give the command to capture, after --", file=sys.stderr)
+        return 1
+    missing = shutil.which(command[0])
+    if missing is None:
+        # A client that is not installed is the commonest failure here, and a
+        # traceback from deep inside subprocess helps nobody: say what is
+        # missing, and that nothing was captured.
+        print(
+            f"{command[0]}: not found on PATH, so there is nothing to capture.",
+            file=sys.stderr,
+        )
+        print(
+            "Install the DIRAC client where this command can see it, or give the full"
+            " path to the script you mean to run.",
+            file=sys.stderr,
+        )
+        return 1
     if not shutil.which("tcpdump"):
         print(
             "tcpdump is not installed: the capture is the evidence, so it is required",

@@ -39,7 +39,8 @@ def test_from_stream_takes_a_side(tmp_path: pathlib.Path, capsys: Any) -> None:
 
 def test_it_says_so_when_tcpdump_is_missing(monkeypatch: Any, capsys: Any) -> None:
     """The capture is the evidence: without it there is nothing to record."""
-    monkeypatch.setattr(shutil, "which", lambda name: None)
+    # the client exists, the capture tool does not: that is the failure to report
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/true" if name == "true" else None)
     assert capture.main(["run", "--", "true"]) == 1
     assert "tcpdump is not installed" in capsys.readouterr().err
 
@@ -121,3 +122,15 @@ def test_the_capture_does_not_need_root_for_the_client(monkeypatch: Any, tmp_pat
     assert argv[-1] == "8443" and "-i" in argv
     (bundle,) = list(tmp_path.iterdir())
     assert (bundle / "capture.pcap").exists()
+
+
+def test_a_client_that_is_not_installed_says_so_instead_of_a_traceback(capsys: Any) -> None:
+    """The commonest failure is a missing client: say which, and that nothing was captured."""
+    assert capture.run(["no-such-dirac-command", "--group", "lhcb_user"]) == 1
+    said = capsys.readouterr().err
+    assert "not found on PATH" in said and "Install the DIRAC client" in said
+
+
+def test_an_empty_command_is_refused(capsys: Any) -> None:
+    assert capture.run([]) == 1
+    assert "give the command" in capsys.readouterr().err
