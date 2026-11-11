@@ -74,3 +74,18 @@ def test_the_transport_cites_the_specification() -> None:
     assert "diset-spec" in transport or "specification" in transport, (
         "src/xrddirac/diset.py must cite docs/diset-spec.md"
     )
+
+
+#: The files that speak the protocol: each must be attested or listed as pending.
+PROTOCOL = ("src/xrddirac/diset.py", "src/xrddirac/codec.py")
+
+
+def test_every_protocol_file_is_accounted_for() -> None:
+    """§CLEANROOM 4: a new protocol file cannot appear without an entry, and the
+    pending list cannot grow silently."""
+    said = (ROOT / "docs" / "ATTESTATIONS.md").read_text()
+    for name in PROTOCOL:
+        assert name in said, f"{name} is not in docs/ATTESTATIONS.md"
+    pending = said.split("## Pending re-derivation", 1)[1]
+    listed = {line.strip() for line in pending.splitlines() if line.strip().startswith("src/")}
+    assert listed == set(PROTOCOL), f"pending list is {sorted(listed)}, expected {sorted(PROTOCOL)}"

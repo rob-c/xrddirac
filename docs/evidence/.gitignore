@@ -1,0 +1,5 @@
+# A key log decrypts the session and a session may carry a token: neither is
+# committed by default. Keep them elsewhere and record their sha256 in evidence.json.
+keys.log
+*.pcap
+*.bin
