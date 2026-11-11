@@ -134,3 +134,72 @@ def test_a_client_that_is_not_installed_says_so_instead_of_a_traceback(capsys: A
 def test_an_empty_command_is_refused(capsys: Any) -> None:
     assert capture.run([]) == 1
     assert "give the command" in capsys.readouterr().err
+
+
+def test_the_hook_logs_both_directions_of_a_tls_socket(
+    tmp_path: pathlib.Path, monkeypatch: Any
+) -> None:
+    """The capture that needs no tcpdump, no root and no tshark: the client's own view.
+
+    The hook is imported the way a client's ``sitecustomize`` is imported, against a
+    stand-in ``ssl.SSLSocket``, so what is tested is the hook itself: every byte sent
+    is appended to ``client.bin``, every byte received to ``server.bin``.
+    """
+    import importlib.util
+    import types
+
+    class Standin:
+        """The four methods of ``ssl.SSLSocket`` a DISET client actually uses."""
+
+        received = b"server said this"
+
+        def send(self, data: Any, flags: int = 0) -> int:
+            return len(data)
+
+        def sendall(self, data: Any, flags: int = 0) -> None:
+            return None
+
+        def recv(self, buflen: int, flags: int = 0) -> bytes:
+            return self.received
+
+        def recv_into(self, buffer: Any, nbytes: int = 0, flags: int = 0) -> int:
+            return 0
+
+    standin = types.ModuleType("ssl")
+    standin.SSLSocket = Standin  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "ssl", standin)
+    monkeypatch.setenv("XRD_DISET_TRACE", str(tmp_path))
+    hook = tmp_path / "sitecustomize.py"
+    hook.write_text(capture._HOOK.lstrip("\n"))
+    spec = importlib.util.spec_from_file_location("hook_under_test", hook)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    socket = Standin()
+    socket.send(b"length:payload")
+    socket.recv(10)
+    for handle in module._files.values():
+        handle.close()
+    assert (tmp_path / "client.bin").read_bytes() == b"length:payload"
+    assert (tmp_path / "server.bin").read_bytes() == b"server said this"
+
+
+def test_the_hook_mode_sets_the_hook_up_for_the_client(
+    tmp_path: pathlib.Path, monkeypatch: Any
+) -> None:
+    """`hook` puts the sitecustomize on the child's PYTHONPATH and points it at the bundle."""
+    seen: dict[str, Any] = {}
+
+    def call(command: Any, env: Any) -> int:
+        seen.update(command=command, env=env)
+        return 0
+
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(subprocess, "call", call)
+    assert capture.with_hook([sys.executable, "-c", "pass"], home=tmp_path) == 0
+    (bundle,) = [one for one in tmp_path.iterdir() if one.is_dir()]
+    assert (bundle / "sitecustomize.py").read_text().count("XRD_DISET_TRACE") == 1
+    assert str(bundle) in seen["env"]["PYTHONPATH"].split(os.pathsep)
+    assert seen["env"]["XRD_DISET_TRACE"] == str(bundle)
+    assert seen["env"]["SSLKEYLOGFILE"].endswith("keys.log")
+    assert (bundle / "transcript.md").exists()

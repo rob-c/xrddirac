@@ -44,6 +44,105 @@ import sys
 
 from .testing import diset_trace
 
+#: The hook `--with-hook` injects: everything a Python client sends and receives
+#: over TLS, written as it happens. Standalone on purpose - it is dropped into a
+#: `PYTHONPATH` and imported by a process that knows nothing about this package -
+#: so it imports nothing of it, and it never raises into the client it observes.
+_HOOK = '''
+"""Written by `diset-capture --with-hook`: log the plaintext of a TLS client."""
+import atexit
+import os
+import ssl
+
+_out = os.environ.get("XRD_DISET_TRACE")
+if _out:
+    _files = {}
+
+    def _close_all():
+        for handle in _files.values():
+            try:
+                handle.close()
+            except Exception:
+                pass
+
+    atexit.register(_close_all)
+
+    def _write(name, data):
+        try:
+            handle = _files.get(name)
+            if handle is None:
+                handle = _files[name] = open(os.path.join(_out, name), "ab", buffering=0)
+            handle.write(bytes(data))
+        except Exception:
+            pass  # an observer must never break the thing it observes
+
+    _send, _sendall, _recv, _recv_into = (
+        ssl.SSLSocket.send,
+        ssl.SSLSocket.sendall,
+        ssl.SSLSocket.recv,
+        ssl.SSLSocket.recv_into,
+    )
+
+    def send(self, data, flags=0):
+        sent = _send(self, data, flags)
+        _write("client.bin", memoryview(data)[:sent])
+        return sent
+
+    def sendall(self, data, flags=0):
+        _write("client.bin", data)
+        return _sendall(self, data, flags)
+
+    def recv(self, buflen, flags=0):
+        data = _recv(self, buflen, flags)
+        _write("server.bin", data)
+        return data
+
+    def recv_into(self, buffer, nbytes=0, flags=0):
+        read = _recv_into(self, buffer, nbytes, flags)
+        _write("server.bin", memoryview(buffer)[:read])
+        return read
+
+    ssl.SSLSocket.send, ssl.SSLSocket.sendall = send, sendall
+    ssl.SSLSocket.recv, ssl.SSLSocket.recv_into = recv, recv_into
+'''
+
+
+def with_hook(command: list[str], *, home: pathlib.Path | None = None, keys: bool = True) -> int:
+    """Run ``command`` with the plaintext hook installed, then write the bundle.
+
+    This is the capture that works everywhere: no `tcpdump`, no root, no TLS
+    decryption and no `tshark`. The client is a Python program, so a
+    ``sitecustomize`` on its ``PYTHONPATH`` sees every byte it sends and receives
+    on a TLS socket, which is exactly the conversation - and it is the client's
+    own view, not a reconstruction from packets.
+    """
+    if not command:
+        print("give the command to capture, after --", file=sys.stderr)
+        return 1
+    if shutil.which(command[0]) is None:
+        print(f"{command[0]}: not found on PATH, so there is nothing to capture.", file=sys.stderr)
+        print(
+            "Install the client, or give the full path to the script you mean to run.",
+            file=sys.stderr,
+        )
+        return 1
+    folder = _bundle(command, home)
+    (folder / "sitecustomize.py").write_text(_HOOK.lstrip("\n"))
+    environment = dict(
+        os.environ,
+        XRD_DISET_TRACE=str(folder),
+        PYTHONPATH=os.pathsep.join(
+            part for part in (str(folder), os.environ.get("PYTHONPATH", "")) if part
+        ),
+    )
+    if keys:
+        environment["SSLKEYLOGFILE"] = str(folder / "keys.log")
+    code = subprocess.call(command, env=environment)
+    _write(folder, command, code)
+    print(f"evidence in {folder}")
+    return code
+
+
 #: Where a bundle goes when the caller names no other place: the working
 #: directory's ``docs/evidence``, which is where the repository keeps them.
 DEFAULT_HOME = pathlib.Path("docs/evidence")
@@ -223,10 +322,20 @@ def main(argv: list[str] | None = None) -> int:
         "--into", type=pathlib.Path, default=None, metavar="DIR", help="where to write the bundle"
     )
     runner.add_argument("command", nargs=argparse.REMAINDER, help="the command, after --")
+    hooker = commands.add_parser(
+        "hook",
+        help="capture a Python client's plaintext (no root, no tcpdump, no tshark)",
+    )
+    hooker.add_argument("--into", type=pathlib.Path, default=None, metavar="DIR")
+    hooker.add_argument("--no-keys", action="store_true", help="do not also write a TLS key log")
+    hooker.add_argument("command", nargs=argparse.REMAINDER, help="the command, after --")
     streamer = commands.add_parser("from-stream", help="decode a plaintext stream")
     streamer.add_argument("path", type=pathlib.Path)
     streamer.add_argument("--side", choices=("client", "server"), default="client")
     args = parser.parse_args(argv)
+    if args.mode == "hook":
+        command = args.command[1:] if args.command[:1] == ["--"] else args.command
+        return with_hook(command, home=args.into, keys=not args.no_keys)
     if args.mode == "run":
         command = args.command[1:] if args.command[:1] == ["--"] else args.command
         if not command:
