@@ -26,3 +26,14 @@ First prototype.
   LFNs are removed when a job is cleaned. Needs xrdwms with `url_storage` (after 0.4.0).
 - The backend puts `lfn:` inputs in `InputSandbox` (DIRAC downloads them into the job's
   directory) rather than `InputData`; datasets go in `native["dirac"]["InputData"]`.
+
+## Testing
+
+- Exercised end to end on **macOS** (Apple Silicon) with X.509 authentication
+  against production LHCb DIRAC: `whoami` and the configuration, catalogue
+  queries (`ls`, `du`, `replicas`, `status`, `urls`, `meta`), job submission and
+  tracking (`submit`, `jobs`, `job-status`, `logging`), and the write cycle on
+  the LFC (`addFile` through `LFNStore`, then `removeFile`) - plus the proxy
+  exchange DIRAC performs for its own tokens. The LHCb CVMFS client is
+  Linux-only, so its configuration is read from CVMFS and its servers spoken to
+  from macOS directly.
