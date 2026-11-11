@@ -210,3 +210,120 @@ def test_two_bundles_in_the_same_second_do_not_collide(tmp_path: pathlib.Path) -
     first = capture._bundle(["one"], tmp_path)
     second = capture._bundle(["one"], tmp_path)
     assert first != second and second.is_dir()
+
+
+def test_run_with_no_command_after_the_dash_dash_is_a_usage_error(capsys: Any) -> None:
+    """`run --` with nothing after it is a mistake to report, not a capture to start."""
+    with pytest.raises(SystemExit) as stopped:
+        capture.main(["run", "--"])
+    assert stopped.value.code != 0
+    assert "give the command to capture" in capsys.readouterr().err
+
+
+def test_the_hook_mode_refuses_what_it_cannot_run(capsys: Any, tmp_path: pathlib.Path) -> None:
+    """No command, or a client that is not installed: one sentence, and nothing written."""
+    assert capture.with_hook([], home=tmp_path) == 1
+    assert "give the command" in capsys.readouterr().err
+    assert capture.with_hook(["no-such-client"], home=tmp_path) == 1
+    said = capsys.readouterr().err
+    assert "not found on PATH" in said and "nothing to capture" in said
+
+
+def test_the_hook_mode_can_leave_the_key_log_out(tmp_path: pathlib.Path, monkeypatch: Any) -> None:
+    """`--no-keys` is for a client whose TLS this is not: no key log is asked for."""
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(subprocess, "call", lambda command, env: seen.update(env) or 0)
+    assert capture.with_hook([sys.executable, "-c", "pass"], home=tmp_path, keys=False) == 0
+    assert "SSLKEYLOGFILE" not in seen
+
+
+def test_the_interface_falls_back_when_the_route_names_none(monkeypatch: Any) -> None:
+    monkeypatch.setattr(sys, "platform", "darwin")
+
+    class Route:
+        stdout = "route to: default\n"
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: Route())
+    assert capture.interface() == "en0"
+
+
+def test_a_capture_that_could_not_start_says_how_to_start_it(
+    tmp_path: pathlib.Path, monkeypatch: Any, capsys: Any
+) -> None:
+    """tcpdump refusing (no sudo) must say so, not leave a silent empty pcap."""
+
+    class Capture:
+        returncode = 1
+        stderr = None
+
+        def communicate(self, timeout: int = 0) -> tuple[bytes, bytes]:
+            return b"", b"tcpdump: permission denied"
+
+        def terminate(self) -> None:
+            pass
+
+        def wait(self, timeout: int = 0) -> int:
+            return 1
+
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(capture, "interface", lambda: "en0")
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: Capture())
+    monkeypatch.setattr(subprocess, "call", lambda command, env: 0)
+    assert capture.run(["true"], home=tmp_path) == 1
+    said = capsys.readouterr().err
+    assert "permission denied" in said and "sudo -v" in said
+
+
+def test_tshark_payloads_become_the_two_streams(tmp_path: pathlib.Path, monkeypatch: Any) -> None:
+    """With tshark the capture is split into its two directions; without it, nothing is faked."""
+    folder = tmp_path / "bundle"
+    folder.mkdir()
+    pcap, keys = folder / "capture.pcap", folder / "keys.log"
+    pcap.write_bytes(b"pcap")
+    keys.write_text("")
+
+    class Ran:
+        stdout = "616263"
+
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/local/bin/tshark")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: Ran())
+    capture._decrypt(pcap, keys, folder)
+    assert (folder / "client.bin").read_bytes() == b"abc"
+    assert (folder / "server.bin").read_bytes() == b"abc"
+
+    empty = folder / "empty"
+    empty.mkdir()
+
+    class Nothing:
+        stdout = ""
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: Nothing())
+    capture._decrypt(pcap, keys, empty)  # a side with no payload writes no stream
+    assert not (empty / "client.bin").exists()
+
+    python = folder / "second"
+    python.mkdir()
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    capture._decrypt(pcap, keys, python)  # no tshark: says so, writes nothing
+    assert not (python / "client.bin").exists()
+
+
+def test_the_two_directions_of_a_capture_are_filtered_by_port() -> None:
+    assert capture._port("client") == "not 8443"
+    assert capture._port("server") == "8443"
+
+
+def test_the_hook_mode_from_the_command_line(tmp_path: pathlib.Path, capsys: Any) -> None:
+    """`diset-capture hook -- CMD` is the spelling a person types."""
+    assert capture.main(["hook", "--into", str(tmp_path), "--", sys.executable, "-c", "pass"]) == 0
+    (bundle,) = [one for one in tmp_path.iterdir() if one.is_dir()]
+    assert (bundle / "sitecustomize.py").exists()
+    assert "evidence in" in capsys.readouterr().out
+
+
+def test_a_bundle_with_no_streams_says_so(tmp_path: pathlib.Path) -> None:
+    folder = tmp_path / "empty"
+    folder.mkdir()
+    capture._write(folder, ["true"], 0)
+    assert "no streams recovered" in (folder / "transcript.md").read_text()

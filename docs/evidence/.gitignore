@@ -3,3 +3,4 @@
 keys.log
 *.pcap
 *.bin
+sitecustomize.py

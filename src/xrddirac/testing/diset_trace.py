@@ -120,75 +120,58 @@ def digest(data: bytes) -> str:
 def read(stream: bytes, *, side: str = "client") -> Trace:
     """The conversation in one direction of a connection, as a :class:`Trace`.
 
-    ``side`` is whose direction the bytes are. A capture with both directions
-    interleaved cannot be split here — TLS records delimit one direction at a
-    time, so a caller hands each direction's stream separately.
-
-    Framing follows the specification: a message is ``length ":" payload``, and
-    the three bytes ``dka`` where a length would start are a keep-alive. A frame
-    that cannot be decoded is recorded as such and *skipping continues* from the
-    next length, because one bad frame should not throw away the evidence around
-    it — the specification's own rule is that a client must not guess, but a
-    transcript's job is to show what happened.
+    ``side`` is whose direction the bytes are. Framing follows the specification:
+    a message is ``length ":" payload``, and the three bytes ``dka`` where a
+    length would start are a keep-alive. A frame that cannot be decoded is
+    recorded as such and skipping continues from the next length, because one bad
+    frame should not throw away the evidence around it: a client must not guess,
+    but a transcript's job is to show what happened.
     """
     messages: list[Message] = []
-    encodings: set[str] = set()
+    seen: set[str] = set()
     at = 0
     while at < len(stream):
-        if stream.startswith(KEEPALIVE, at):
-            messages.append(Message(side=side, length=0, kind="keepalive"))
-            at += len(KEEPALIVE)
-            continue
-        colon = stream.find(b":", at, at + 12)
-        if colon < 0:
-            messages.append(
-                Message(side=side, length=0, kind="undecodable", problem="no length before ':'")
-            )
-            break
-        try:
-            length = int(stream[at:colon])
-        except ValueError:
-            messages.append(
-                Message(
-                    side=side,
-                    length=0,
-                    kind="undecodable",
-                    problem=f"not a length: {stream[at:colon]!r}",
-                )
-            )
-            at = colon + 1
-            continue
-        start = colon + 1
-        if length > MAX_MESSAGE:
-            messages.append(
-                Message(side=side, length=length, kind="undecodable", problem="over the limit")
-            )
-            break
-        payload = stream[start : start + length]
-        if len(payload) < length:
-            messages.append(
-                Message(
-                    side=side,
-                    length=length,
-                    kind="undecodable",
-                    problem=f"truncated: {len(payload)} of {length} bytes",
-                )
-            )
-            break
-        kind, value = _decoded(payload)
-        encodings.add("json" if kind == "json" else "dencode" if kind == "dencode" else "")
-        messages.append(
-            Message(
-                side=side,
-                length=length,
-                kind="value" if kind else "undecodable",
-                value=redact(value) if kind else None,
-                problem="" if kind else "neither JSON nor DEncode",
-            )
-        )
-        at = start + length
-    seen = tuple(name for name in ("json", "dencode") if name in encodings)
-    return Trace(tuple(messages), digest(stream), len(stream), seen)
+        message, at, encoding = _step(stream, at, side)
+        messages.append(message)
+        if encoding:
+            seen.add(encoding)
+    encodings = tuple(name for name in ("json", "dencode") if name in seen)
+    return Trace(tuple(messages), digest(stream), len(stream), encodings)
+
+
+def _step(stream: bytes, at: int, side: str) -> tuple[Message, int, str]:
+    """One frame from ``at``: the message, where the next one starts, its encoding."""
+    if stream.startswith(KEEPALIVE, at):
+        return Message(side=side, length=0, kind="keepalive"), at + len(KEEPALIVE), ""
+    colon = stream.find(b":", at, at + 12)
+    if colon < 0:
+        return _broken(side, "no length before ':'"), len(stream), ""
+    return _message(stream, at, colon, side)
+
+
+def _message(stream: bytes, at: int, colon: int, side: str) -> tuple[Message, int, str]:
+    """The message whose length ends at ``colon``, and where the next one starts."""
+    try:
+        length = int(stream[at:colon])
+    except ValueError:
+        return _broken(side, f"not a length: {stream[at:colon]!r}"), colon + 1, ""
+    if length > MAX_MESSAGE:
+        return _broken(side, "over the limit", length=length), len(stream), ""
+    start = colon + 1
+    payload = stream[start : start + length]
+    if len(payload) < length:
+        problem = f"truncated: {len(payload)} of {length} bytes"
+        return _broken(side, problem, length=length), len(stream), ""
+    encoding, value = _decoded(payload)
+    if not encoding:
+        return _broken(side, "neither JSON nor DEncode", length=length), start + length, ""
+    message = Message(side=side, length=length, kind="value", value=redact(value))
+    return message, start + length, encoding
+
+
+def _broken(side: str, problem: str, *, length: int = 0) -> Message:
+    """A frame that is not a message, saying why."""
+    return Message(side=side, length=length, kind="undecodable", problem=problem)
 
 
 def _decoded(payload: bytes) -> tuple[str, Any]:
@@ -217,22 +200,33 @@ def redact(value: Any, *, limit: int = _VALUE_LIMIT) -> Any:
     The replacement says what it replaced and how big it was — a reviewer must be
     able to see that a token was there, and that nothing else was hidden.
     """
-    if isinstance(value, str):
-        if _SECRET.search(value) or _JWT.search(value):
-            return f"<redacted: {len(value)} chars>"
-        return value if len(value) <= limit else f"{value[:limit]}… <{len(value)} chars>"
-    if isinstance(value, bytes):
-        return f"<{len(value)} bytes>"
     if isinstance(value, dict):
-        return {
-            key: f"<redacted: {len(str(item))} chars>"
-            if isinstance(key, str) and _SECRET_KEY.match(key)
-            else redact(item, limit=limit)
-            for key, item in value.items()
-        }
+        return _redacted_mapping(value, limit=limit)
     if isinstance(value, list | tuple):
         return [redact(item, limit=limit) for item in value]
+    if isinstance(value, bytes):
+        return f"<{len(value)} bytes>"
+    if isinstance(value, str):
+        return _redacted_text(value, limit=limit)
     return value
+
+
+def _redacted_text(value: str, *, limit: int) -> str:
+    """A string: a credential if it looks like one, else itself, cut if it is long."""
+    if _SECRET.search(value) or _JWT.search(value):
+        return f"<redacted: {len(value)} chars>"
+    return value if len(value) <= limit else f"{value[:limit]}… <{len(value)} chars>"
+
+
+def _redacted_mapping(value: dict[Any, Any], *, limit: int) -> dict[Any, Any]:
+    """A mapping: a credential-named key's value goes whatever it looks like."""
+    out: dict[Any, Any] = {}
+    for key, item in value.items():
+        if isinstance(key, str) and _SECRET_KEY.match(key):
+            out[key] = f"<redacted: {len(str(item))} chars>"
+        else:
+            out[key] = redact(item, limit=limit)
+    return out
 
 
 def as_markdown(trace: Trace, *, side: str = "client") -> str:
