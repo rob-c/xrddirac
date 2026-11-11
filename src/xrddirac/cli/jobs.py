@@ -156,7 +156,7 @@ def setup_jobs(parser: argparse.ArgumentParser) -> Runner:
     parser.add_argument(
         "-s", "--status", action="append", default=[], help="only this status (repeatable)"
     )
-    parser.add_argument("--name", help="job name (% is a wildcard)")
+    parser.add_argument("--name", help="job name (%% is a wildcard)")
     parser.add_argument("--group", help="job group")
     parser.add_argument("--site", help="site")
     parser.add_argument("--days", type=float, help="submitted in the last DAYS days")
