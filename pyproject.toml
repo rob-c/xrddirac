@@ -54,6 +54,9 @@ dev = [
 
 [project.scripts]
 xrddirac = "xrddirac.cli:main"
+# `diset-capture run -- <client>` records one DISET exchange as evidence
+# (docs/evidence/README.md); `diset-capture from-stream FILE` decodes one.
+diset-capture = "xrddirac.capture:main"
 
 [project.entry-points."xrdwms.backends"]
 dirac = "xrddirac.wms:DiracBackend"
