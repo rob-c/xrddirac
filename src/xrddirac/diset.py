@@ -1,5 +1,10 @@
 """DISET, DIRAC's RPC protocol: TLS with the proxy as client certificate, then framed values.
 
+The requirements this implements are numbered in ``docs/diset-spec.md`` - a
+clean-room specification, written because DIRAC is GPL-3.0-only and this package
+is LGPL-3.0-or-later (``docs/CLEANROOM.md``). A change here should name the
+sections it implements.
+
 Every DIRAC 8/9 service still listens on ``dips://host:port/System/Component``.
 A call is one TLS connection (the X.509 proxy is the client certificate:
 the server reads the user's DN, VO and group from it, nothing else is sent
