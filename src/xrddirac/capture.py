@@ -76,9 +76,8 @@ if _out:
         except Exception:
             pass  # an observer must never break the thing it observes
 
-    _send, _sendall, _recv, _recv_into = (
+    _send, _recv, _recv_into = (
         ssl.SSLSocket.send,
-        ssl.SSLSocket.sendall,
         ssl.SSLSocket.recv,
         ssl.SSLSocket.recv_into,
     )
@@ -89,8 +88,14 @@ if _out:
         return sent
 
     def sendall(self, data, flags=0):
-        _write("client.bin", data)
-        return _sendall(self, data, flags)
+        # Loop the *original* send rather than the C sendall: the C one calls back
+        # into the patched send, which would log every frame twice.
+        view = memoryview(data)
+        sent = 0
+        while sent < len(view):
+            written = _send(self, view[sent:], flags)
+            _write("client.bin", view[sent : sent + written])
+            sent += written
 
     def recv(self, buflen, flags=0):
         data = _recv(self, buflen, flags)
@@ -152,7 +157,11 @@ def _bundle(command: list[str], home: pathlib.Path | None = None) -> pathlib.Pat
     """Where this run's evidence goes: ``HOME``/docs/evidence/<stamp>-<command>."""
     stamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
     name = shlex.split(shlex.join(command))[0].replace("/", "_")
-    folder = (home or DEFAULT_HOME) / f"{stamp}-{name}"
+    base = (home or DEFAULT_HOME) / f"{stamp}-{name}"
+    folder, attempt = base, 1
+    while folder.exists():  # two captures in the same second must not collide
+        attempt += 1
+        folder = base.with_name(f"{base.name}-{attempt}")
     folder.mkdir(parents=True)
     return folder
 

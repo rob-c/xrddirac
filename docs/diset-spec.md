@@ -131,6 +131,12 @@ success = { "OK": true,  "Value": <any> }              ; Value MAY be absent
 failure = { "OK": false, "Message": <string>, "Errno": <integer> }
 ```
 
+A real server's failure, recorded in
+[`evidence/20261111T131637Z-python`](evidence/20261111T131637Z-python/transcript.md)
+against LHCb DIRAC 12.0.23, also carries a `CallStack` — an array of the server's
+own traceback lines — so a receiver MUST tolerate members it does not know and
+MUST pass them on to a caller that asks for the whole answer **[capture]**.
+
 A success MAY carry additional members beside `Value` — `JobManager.killJob`
 reports `InvalidJobIDs`, `submitJob` a `requireProxyUpload` flag — and a
 receiver MUST pass those on rather than discard them **[impl]**. A failure's
@@ -172,7 +178,9 @@ The two inner arrays are arrays, not objects: the protocol is positional.
 
 §5.2 The **server** answers with a result (§4.4) **[impl]**:
 
-* success — the action is accepted; proceed to §6;
+* success — the action is accepted; proceed to §6. The acceptance is a message
+  of its own (`{"OK": true, "Value": null}` in the recording), and the answer to
+  the call (§6.2) is a *second* message **[capture]**;
 * failure — the service refused; the `Message` MUST be reported verbatim, since
   it is the only place a server explains itself;
 * a success whose value is an object asking for **delegation** MUST be refused
@@ -269,13 +277,18 @@ exchange or a catalogue query) against the server to be supported — as bytes
 (`tcpdump -s0 -w diset.pcap port <port>`, or the deployment's own client
 logging), then answer:
 
-| # | question | requirements it settles |
-| --- | --- | --- |
-| C1 | the proposal's exact values: `setup`, `vo`, `kind`, `version` | §5.1 |
+Recorded 2026-11-11 against **LHCb DIRAC 12.0.23** (`lbvobox300.cern.ch:9135`)
+with `diset-capture hook`, two calls: `Configuration/Server.getVersion` (answered)
+and `Framework/ProxyManager.exchangeProxyForToken` (refused, service not up).
+Bundles: [`evidence/`](evidence/), transcripts with the sha256 of each stream.
+
+| # | question | requirements it settles | settled? |
+| --- | --- | --- | --- |
+| C1 | the proposal's exact values: `setup`, `vo`, `kind`, `version` | §5.1 | **yes**: `["System/Component", "None", "unknown"]`, `["RPC", method]`, `""` for extra credentials, a version string the server only logs **[capture]** |
 | C2 | the keep-alive: sent unprompted? interval? `dka` form only, or the `kaping` value too? | §3.4, §3.5 |
-| C3 | the result members on success and on failure (`Value` absent? `Errno` present?) | §4.4 |
-| C4 | the encoding the server answers in (JSON or DEncode) | §4.1–§4.2 |
-| C5 | whether a connection ever carries more than one call | §2.4 |
+| C3 | the result members on success and on failure (`Value` absent? `Errno` present?) | §4.4 | **yes**: success `{"OK": true, "Value": null\|value}`, failure `{"OK": false, "Message", "Errno": 0, "CallStack": [...]}` **[capture]** |
+| C4 | the encoding the server answers in (JSON or DEncode) | §4.1–§4.2 | **yes, for this server**: JSON both ways (**[capture]**); DEncode stays `[impl]` for DIRAC 8 |
+| C5 | whether a connection ever carries more than one call | §2.4 | **partly**: one proposal, one call, two server messages in this recording; nothing shows reuse **[capture]** |
 | C6 | the largest message a server sends, for `MAX_MESSAGE` | §3.6 |
 | C7 | whether the server ever asks for delegation | §5.2 |
 

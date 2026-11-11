@@ -177,10 +177,11 @@ def test_the_hook_logs_both_directions_of_a_tls_socket(
     spec.loader.exec_module(module)
     socket = Standin()
     socket.send(b"length:payload")
+    socket.sendall(b"second")  # must be logged once, not twice
     socket.recv(10)
     for handle in module._files.values():
         handle.close()
-    assert (tmp_path / "client.bin").read_bytes() == b"length:payload"
+    assert (tmp_path / "client.bin").read_bytes() == b"length:payloadsecond"
     assert (tmp_path / "server.bin").read_bytes() == b"server said this"
 
 
@@ -203,3 +204,9 @@ def test_the_hook_mode_sets_the_hook_up_for_the_client(
     assert seen["env"]["XRD_DISET_TRACE"] == str(bundle)
     assert seen["env"]["SSLKEYLOGFILE"].endswith("keys.log")
     assert (bundle / "transcript.md").exists()
+
+
+def test_two_bundles_in_the_same_second_do_not_collide(tmp_path: pathlib.Path) -> None:
+    first = capture._bundle(["one"], tmp_path)
+    second = capture._bundle(["one"], tmp_path)
+    assert first != second and second.is_dir()
