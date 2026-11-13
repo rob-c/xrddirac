@@ -27,18 +27,20 @@ classifiers = [
 # fan-out, logging and the report contract, xrdhttp DiracX, S3 sandboxes and
 # the WLCG Tape REST API. No DIRAC, no M2Crypto, no diracx-client.
 dependencies = [
-  "xrdcore>=0.4.0,<0.5",
-  "xrdsec>=0.4.0,<0.5",
-  "xrdhttp>=0.4.0,<0.5",
+  "xrdcore>=0.5.0,<0.6",
+  "xrdsec>=0.5.0,<0.6",
+  "xrdhttp>=0.5.0,<0.6",
 ]
 
 [project.urls]
 Homepage = "https://github.com/rob-c/xrddirac"
 Repository = "https://github.com/rob-c/xrddirac"
+Issues = "https://github.com/rob-c/xrddirac/issues"
+Changelog = "https://github.com/rob-c/xrddirac/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 # The xrdwms backend (``kind = "dirac"``) and the dask job layer on it.
-wms = ["xrdwms>=0.4.0,<0.5"]
+wms = ["xrdwms>=0.5.0,<0.6"]
 dev = [
   "build>=1,<2",
   "complexipy>=6,<7",
@@ -49,7 +51,7 @@ dev = [
   "pytest-timeout",
   "pytest-xdist",
   "ruff>=0.5",
-  "xrdwms>=0.4.0,<0.5",
+  "xrdwms>=0.5.0,<0.6",
 ]
 
 [project.scripts]
